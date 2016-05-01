@@ -4,6 +4,7 @@ from statistics import mean
 import sys
 
 
+# these imports are relatively expensive, so delay them until needed
 def import_matplotlib():
     global matplotlib
     import matplotlib
@@ -13,7 +14,7 @@ def import_matplotlib():
     from mpl_toolkits.basemap import Basemap
 
 
-def main(data, img_path):
+def extract_positions(data):
     lats = []
     lons = []
     alts = []
@@ -21,40 +22,69 @@ def main(data, img_path):
     print('processing data...')
     for line in data:
         pieces = line.split(',')
-        if pieces[1] == '3':
-            lats.append(float(pieces[14]))
-            lons.append(float(pieces[15]))
-            alts.append(int(pieces[11]))
+        # only include Airborne Position Messages, 'MSG,3' type
+        if pieces[1] != '3':
+            continue
+        lats.append(float(pieces[14]))
+        lons.append(float(pieces[15]))
+        alts.append(int(pieces[11]))
 
+    return lats, lons, alts
+
+
+def draw_map(lats, lons, px_size, resolution):
     print('drawing map...')
-    figure = matplotlib.pyplot.figure(figsize=(80, 80))
-    my_map = Basemap(llcrnrlon=min(lons), llcrnrlat=min(lats),
-                     urcrnrlon=max(lons), urcrnrlat=max(lats),
-                     lon_0=mean(lons), lat_0=mean(lats),
-                     resolution='h', projection='tmerc')
+    fig_size = px_size // 100
+    figure = matplotlib.pyplot.figure(figsize=(fig_size, fig_size))
+    basemap = Basemap(llcrnrlon=min(lons), llcrnrlat=min(lats),
+                      urcrnrlon=max(lons), urcrnrlat=max(lats),
+                      lon_0=mean(lons), lat_0=mean(lats),
+                      resolution='i', projection='tmerc')
     print('drawing map features...')
-    my_map.drawcoastlines()
-    my_map.drawstates()
-    my_map.drawrivers()
-    my_map.fillcontinents(color='0.99', zorder=0)
+    basemap.drawcoastlines()
+    basemap.drawstates()
+    basemap.drawrivers()
+    basemap.fillcontinents(color='0.99', zorder=0)
+    figure.tight_layout()
 
+    return figure, basemap
+
+
+def plot_points(basemap, lats, lons, alts):
     print('plotting %s points...' % len(lons))
-    x, y = my_map(lons, lats)
+    x, y = basemap(lons, lats)
+    # we color and size points based on altitude; this prevents a total mess
+    # on normal approach and departure patterns
     max_alt = max(alts)
     sizes = [(a * 2.5 / max_alt) + 0.5 for a in alts]
-    my_map.scatter(x, y, s=sizes, c=alts, marker='o', lw=0, cmap='plasma')
-    figure.savefig(img_path, bbox_inches='tight', pad_inches=0)
+    basemap.scatter(x, y, s=sizes, c=alts, marker='o', lw=0, cmap='plasma')
 
 
-if __name__ == '__main__':
+def save_image(figure, img_path):
+    print('saving map image to "%s"...' % img_path)
+    figure.savefig(img_path, pad_inches=0)
+
+
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help='path to input CSV data, - for stdin')
     parser.add_argument('-o', '--output', help='path to output image', default='map.png')
+    parser.add_argument('--resolution', help='resolution of basemap', default='h',
+                        choices=('c', 'l', 'i', 'h', 'f'))
+    parser.add_argument('-s', '--size', help='size of produced image in pixels', default=4000,
+                        type=int)
     args = parser.parse_args()
 
     import_matplotlib()
     if args.input == '-':
-        main(sys.stdin, args.output)
+        lats, lons, alts = extract_positions(sys.stdin)
     else:
         with open(args.input, 'r') as data:
-            main(data, args.output)
+            lats, lons, alts = extract_positions(data)
+    figure, basemap = draw_map(lats, lons, args.size, args.resolution)
+    plot_points(basemap, lats, lons, alts)
+    save_image(figure, args.output)
+
+
+if __name__ == '__main__':
+    main()
